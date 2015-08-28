@@ -1,4 +1,4 @@
-import os
+import os, datetime
 import unittest
 from __main__ import vtk, qt, ctk, slicer
 
@@ -214,6 +214,9 @@ class LumpNavGuidelet(Guidelet):
     self.tumorMarkups_NeedleObserver = None
     self.setupScene()
 
+    # Setup LIM specific
+    self.setupLumpNavLIM('C:/Mikael/src/LumpNavLIM/Data/')
+    
     # Setting button open on startup.
     self.calibrationCollapsibleButton.setProperty('collapsed', False)
     
@@ -260,9 +263,14 @@ class LumpNavGuidelet(Guidelet):
     self.deleteLastFiducialDuringNavigationButton.connect('clicked()', self.onDeleteLastFiducialClicked)    
     self.deleteAllFiducialsButton.connect('clicked()', self.onDeleteAllFiducialsClicked)
     
-    self.rightCameraButton.connect('clicked()', self.onRightCameraButtonClicked)
+    #self.rightCameraButton.connect('clicked()', self.onRightCameraButtonClicked)
     self.leftCameraButton.connect('clicked()', self.onLeftCameraButtonClicked)
 
+    self.setupIntuitiveViewButton.connect('clicked()', self.onSetupIntuitiveViewClicked) 
+    self.setFocalPointRButton.connect('clicked()', self.setFocalPointRClicked)
+    self.setFocalPointAButton.connect('clicked()', self.setFocalPointAClicked)  
+    self.setFocalPointSButton.connect('clicked()', self.setFocalPointSClicked)
+     
     self.placeTumorPointAtCauteryTipButton.connect('clicked(bool)', self.onPlaceTumorPointAtCauteryTipClicked)
 
     self.pivotSamplingTimer.connect('timeout()',self.onPivotSamplingTimeout)
@@ -437,15 +445,15 @@ class LumpNavGuidelet(Guidelet):
       
     # Set up breach warning light
     import BreachWarningLight
-    logging.debug('Set up breach warning light')
-    self.breachWarningLightLogic = BreachWarningLight.BreachWarningLightLogic()
-    self.breachWarningLightLogic.setMarginSizeMm(float(self.parameterNode.GetParameter('BreachWarningLightMarginSizeMm')))
-    if (self.parameterNode.GetParameter('EnableBreachWarningLight')=='True'):
-      logging.debug("BreachWarningLight: active")
-      self.breachWarningLightLogic.startLightFeedback(self.breachWarningNode, self.connectorNode)
-    else:
-      logging.debug("BreachWarningLight: shutdown")
-      self.breachWarningLightLogic.shutdownLight(self.connectorNode)
+    # logging.debug('Set up breach warning light')
+    # self.breachWarningLightLogic = BreachWarningLight.BreachWarningLightLogic()
+    # self.breachWarningLightLogic.setMarginSizeMm(float(self.parameterNode.GetParameter('BreachWarningLightMarginSizeMm')))
+    # if (self.parameterNode.GetParameter('EnableBreachWarningLight')=='True'):
+      # logging.debug("BreachWarningLight: active")
+      # self.breachWarningLightLogic.startLightFeedback(self.breachWarningNode, self.connectorNode)
+    # else:
+      # logging.debug("BreachWarningLight: shutdown")
+    # self.breachWarningLightLogic.shutdownLight(self.connectorNode)
 
     # Build transform tree
     logging.debug('Set up transform tree')
@@ -470,6 +478,223 @@ class LumpNavGuidelet(Guidelet):
     dataProbeParameterNode=dataProbeUtil.getParameterNode()
     dataProbeParameterNode.SetParameter('showSliceViewAnnotations', '0')
 
+###############################################################################
+### Start LIM stuff     
+###############################################################################
+
+  def setupLumpNavLIM(self, folderPath):
+    logging.info('setupLumpNavLIM')
+    
+    self.cauteryTipToNeedleTip = None
+    
+    self.cmdUpdateTransform = slicer.modulelogic.vtkSlicerOpenIGTLinkCommand()
+    self.cmdUpdateTransform.SetCommandTimeoutSec(15);
+    self.cmdUpdateTransform.SetCommandName('UpdateTransform')   
+    
+    # Load breast model and texture plus corresponding fiducials
+    slicer.util.loadMarkupsFiducialList(folderPath + 'FiducialsBreastModel.fcsv')
+    slicer.util.loadModel(folderPath + 'BreastModel.obj')
+    slicer.util.loadVolume(folderPath + 'BreastModelTexture.png')
+    
+    self.breastModel = slicer.util.getNode(pattern="BreastModel")
+    if self.breastModel:
+      self.breastModel.SetDisplayVisibility(False)
+      
+    self.fiducialsBreastModel = slicer.util.getNode(pattern="FiducialsBreastModel")
+    if self.fiducialsBreastModel:
+      self.fiducialsBreastModel.SetDisplayVisibility(False)
+    
+    self.breastModelTexture = slicer.util.getNode(pattern="BreastModelTexture")
+    if self.breastModelTexture:
+      self.breastModelTexture.SetDisplayVisibility(False)
+      
+    # Create transforms
+    self.breastModelToBreast = slicer.util.getNode('BreastModelToBreast')    
+    if not self.breastModelToBreast:
+      self.breastModelToBreast = slicer.vtkMRMLLinearTransformNode()
+      self.breastModelToBreast.SetName('BreastModelToBreast')
+      slicer.mrmlScene.AddNode(self.breastModelToBreast)
+
+    self.fRBLToSLPR = slicer.util.getNode('FRBLToSLPR')    
+    if not self.fRBLToSLPR:
+      self.fRBLToSLPR = slicer.vtkMRMLLinearTransformNode()
+      self.fRBLToSLPR.SetName('FRBLToSLPR')
+      slicer.mrmlScene.AddNode(self.fRBLToSLPR)
+      
+    # Create fiducials
+    self.fiducialsFRBL = slicer.util.getNode('FiducialsFRBL')    
+    if not self.fiducialsFRBL:
+      self.fiducialsFRBL = slicer.vtkMRMLMarkupsFiducialNode()
+      self.fiducialsFRBL.SetName('FiducialsFRBL')
+      slicer.mrmlScene.AddNode(self.fiducialsFRBL)
+      self.fiducialsFRBL.SetDisplayVisibility(False)
+      
+    self.fiducialsSLPR = slicer.util.getNode('FiducialsSLPR')    
+    if not self.fiducialsSLPR:
+      self.fiducialsSLPR = slicer.vtkMRMLMarkupsFiducialNode()
+      self.fiducialsSLPR.SetName('FiducialsSLPR')
+      self.fiducialsSLPR.AddFiducial(0, 100, 0)
+      self.fiducialsSLPR.SetNthFiducialLabel(0, 'S')
+      self.fiducialsSLPR.AddFiducial(-100, 0, 0)
+      self.fiducialsSLPR.SetNthFiducialLabel(1, 'L')
+      self.fiducialsSLPR.AddFiducial(0, -100, 0)
+      self.fiducialsSLPR.SetNthFiducialLabel(2, 'P')
+      self.fiducialsSLPR.AddFiducial(100, 0, 0)
+      self.fiducialsSLPR.SetNthFiducialLabel(3, 'R')   
+      slicer.mrmlScene.AddNode(self.fiducialsSLPR)
+      self.fiducialsSLPR.SetDisplayVisibility(False)
+    
+    # Build transform tree
+    self.ReferenceToRas.SetAndObserveTransformNodeID(self.fRBLToSLPR.GetID())
+    self.fiducialsBreastModel.SetAndObserveTransformNodeID(self.needleTipToNeedle.GetID()) 
+    self.breastModelToBreast.SetAndObserveTransformNodeID(self.needleTipToNeedle.GetID())        
+    self.breastModel.SetAndObserveTransformNodeID(self.breastModelToBreast.GetID())
+    
+    # Import distanceToModelLogic
+    import DistanceToModel
+    self.distanceToModelLogic = DistanceToModel.DistanceToModelLogic(self.tumorModel_Needle)
+    
+    # Show ultrasound in red view again.
+    layoutManager = self.layoutManager
+    redSlice = layoutManager.sliceWidget('Red')
+    redSliceLogic = redSlice.sliceLogic()
+    redSliceLogic.GetSliceCompositeNode().SetBackgroundVolumeID(slicer.util.getNode('Image_Reference').GetID())
+    
+  # Uses: Fiducial Registration module in 3D Slicer
+  def fiducialRegistration(self, saveTransform, fixedLandmarks, movingLandmarks, transformType):
+    logging.info("Fiducial registration starts")
+    parameters = {}
+    rms = 0
+    parameters["fixedLandmarks"] = fixedLandmarks.GetID()
+    parameters["movingLandmarks"] = movingLandmarks.GetID()
+    parameters["saveTransform"] = saveTransform.GetID()
+    parameters["rms"] = rms 
+    parameters["transformType"] = transformType
+    fidReg = slicer.modules.fiducialregistration
+    slicer.cli.run(fidReg, None, parameters)
+    logging.info("Fiducial registration finished")
+    
+    return True
+
+  # From: PLUS Remote module in 3D Slicer
+  def updatePlusTransform(self, connectorNodeId, transformNode):
+    # Get transform matrix as string
+    transformMatrix = transformNode.GetMatrixTransformToParent()
+    transformValue = ""
+    for i in range(0,4):
+      for j in range(0,4):
+        transformValue = transformValue + str(transformMatrix.GetElement(i,j)) + " "
+    transformValue = transformValue[:-1] # remove last character (extra space at the end)
+    # Get transform date as string
+    transformDate = str(datetime.datetime.now())
+
+    self.cmdUpdateTransform.SetCommandAttribute('TransformName', transformNode.GetName())
+    self.cmdUpdateTransform.SetCommandAttribute('TransformValue', transformValue)
+    self.cmdUpdateTransform.SetCommandAttribute('TransformDate', transformDate)
+    slicer.modules.openigtlinkremote.logic().SendCommand(self.cmdUpdateTransform, connectorNodeId)
+    
+    logging.info('INFO | ' + transformNode.GetName() + ' added to PLUS.')
+    
+  def onSetupIntuitiveViewClicked(self):
+    if self.setupIntuitiveViewButton.text == 'Record Front Position':
+      self.recordCauteryTipToNeedleTipPoint()
+      self.setupIntuitiveViewButton.setText('Record Right Position')     
+      
+    elif self.setupIntuitiveViewButton.text == 'Record Right Position':
+      self.recordCauteryTipToNeedleTipPoint()
+      self.setupIntuitiveViewButton.setText('Record Back Position')  
+      
+    elif self.setupIntuitiveViewButton.text == 'Record Back Position':
+      self.recordCauteryTipToNeedleTipPoint()
+      self.setupIntuitiveViewButton.setText('Record Left Position')  
+      
+    elif self.setupIntuitiveViewButton.text == 'Record Left Position':
+      self.setupIntuitiveViewButton.enabled = False
+      self.addTextureToModel(self.breastModel, self.breastModelTexture)
+      self.recordCauteryTipToNeedleTipPoint()
+      self.registerBreastModelToBreast()
+      self.align3dViewToRAS()
+      self.startDistanceToModel()
+      self.setupIntuitiveViewButton.setText('Breast Model Added')
+  
+  # Show a texture on a model
+  def addTextureToModel(self, modelNode, texture): 
+    modelDisplayNode=modelNode.GetDisplayNode() 
+    textureImageFlipVert=vtk.vtkImageFlip() 
+    textureImageFlipVert.SetFilteredAxis(1) 
+    textureImageFlipVert.SetInputConnection(texture.GetImageDataConnection()) 
+    modelDisplayNode.SetTextureImageDataConnection(textureImageFlipVert.GetOutputPort()) 
+    
+    logging.info('INFO | BreastModel texturized.')
+    
+  def startDistanceToModel(self):
+    self.distanceToModelLogic.SetMembers(self.tumorModel_Needle, self.needleToReference, self.cauteryTipToCautery, self.cauteryToReference)
+    self.distanceToModelLogic.addCalculateDistanceObserver()  
+  
+  def recordCauteryTipToNeedleTipPoint(self): 
+    if not self.cauteryTipToNeedleTip:
+      self.cauteryTipToNeedleTip = slicer.util.getNode('CauteryTipToNeedleTi')    
+    
+    if self.cauteryTipToNeedleTip:
+      point = [0,0,0]     
+      m = vtk.vtkMatrix4x4()
+      self.cauteryTipToNeedleTip.GetMatrixTransformToWorld(m)
+      point[0] = m.GetElement(0, 3)
+      point[1] = m.GetElement(1, 3)
+      point[2] = m.GetElement(2, 3)      
+      self.fiducialsFRBL.AddFiducial(point[0], point[1], point[2])      
+      
+  def align3dViewToRAS(self):   
+    logging.debug('align3dViewToRAS')  
+    self.fiducialsFRBL.SetAndObserveTransformNodeID(self.needleTipToNeedle.GetID()) 
+    
+    fiducialsWorldFRBL = slicer.util.getNode('FiducialsWorldFRBL')
+    if not fiducialsWorldFRBL:
+      # Create a fiducial list containing fiducialsFRBLs world coordinates
+      fiducialsWorldFRBL=slicer.vtkMRMLMarkupsFiducialNode()
+      fiducialsWorldFRBL.SetName('FiducialsWorldFRBL')
+      ras = [0,0,0,1]
+      for fiducialIdx in range(self.fiducialsFRBL.GetNumberOfFiducials()):
+        self.fiducialsFRBL.GetNthFiducialWorldCoordinates(fiducialIdx, ras)
+        fiducialsWorldFRBL.AddFiducial(ras[0], ras[1], ras[2])
+      slicer.mrmlScene.AddNode(fiducialsWorldFRBL)
+      fiducialsWorldFRBL.SetDisplayVisibility(False)
+      
+    self.fiducialRegistration(self.fRBLToSLPR, self.fiducialsSLPR, fiducialsWorldFRBL, "Rigid")
+    self.setFocalPointByAxes(ctk.ctkAxesWidget.Anterior) 
+       
+  def registerBreastModelToBreast(self):     
+    logging.debug('registerBreastModelToBreast')
+    self.breastModel.GetDisplayNode().SetOpacity(0.35)
+    self.breastModel.GetDisplayNode().SetBackfaceCulling(True)
+    self.breastModel.GetDisplayNode().SetFrontfaceCulling(False)
+    self.fiducialRegistration(self.breastModelToBreast, self.fiducialsFRBL, self.fiducialsBreastModel, "Rigid")
+    self.breastModel.SetDisplayVisibility(True)
+
+  def setFocalPointRClicked(self):
+    self.setFocalPointByAxes(ctk.ctkAxesWidget.Right)
+    
+  def setFocalPointSClicked(self):
+    self.setFocalPointByAxes(ctk.ctkAxesWidget.Superior)
+    
+  def setFocalPointAClicked(self):
+    self.setFocalPointByAxes(ctk.ctkAxesWidget.Anterior)
+        
+  def setFocalPointByAxes(self, ctkAxes):
+    lm=slicer.app.layoutManager() 
+    view=lm.threeDWidget(0).threeDView() 
+    view.lookFromViewAxis(ctkAxes)
+    
+    # This is for the case of two available 3D views where we don't know which one gets chosen by view=lm.threeDWidget(0).threeDView() 
+    threeDWidget=lm.threeDWidget(1)
+    if threeDWidget:
+      view = threeDWidget.threeDView() 
+      view.lookFromViewAxis(ctkAxes) 
+      
+###############################################################################
+### End LIM stuff     
+###############################################################################
+
   def disconnect(self):#TODO see connect
     logging.debug('LumpNav.disconnect()')
     Guidelet.disconnect(self)
@@ -489,9 +714,14 @@ class LumpNavGuidelet(Guidelet):
     self.deleteAllFiducialsButton.disconnect('clicked()', self.onDeleteAllFiducialsClicked)
     self.placeButton.disconnect('clicked(bool)', self.onPlaceClicked)
 
-    self.rightCameraButton.disconnect('clicked()', self.onRightCameraButtonClicked)
+    #self.rightCameraButton.disconnect('clicked()', self.onRightCameraButtonClicked)
     self.leftCameraButton.disconnect('clicked()', self.onLeftCameraButtonClicked)
 
+    self.setupIntuitiveViewButton.disconnect('clicked()', self.onSetupIntuitiveViewClicked) 
+    self.setFocalPointRButton.disconnect('clicked()', self.setFocalPointRClicked)
+    self.setFocalPointAButton.disconnect('clicked()', self.setFocalPointAClicked)  
+    self.setFocalPointSButton.disconnect('clicked()', self.setFocalPointSClicked)
+    
     self.pivotSamplingTimer.disconnect('timeout()',self.onPivotSamplingTimeout)
 
     self.cameraViewAngleSlider.disconnect('valueChanged(double)', self.viewpointLogic.SetCameraViewAngleDeg)
@@ -500,7 +730,6 @@ class LumpNavGuidelet(Guidelet):
     self.cameraZPosSlider.disconnect('valueChanged(double)', self.viewpointLogic.SetCameraZPosMm)
     
     self.placeTumorPointAtCauteryTipButton.disconnect('clicked(bool)', self.onPlaceTumorPointAtCauteryTipClicked)
-
     
   def onPivotSamplingTimeout(self):#lumpnav
     self.countdownLabel.setText("Pivot calibrating for {0:.0f} more seconds".format(self.pivotCalibrationStopTime-time.time())) 
@@ -537,11 +766,13 @@ class LumpNavGuidelet(Guidelet):
     self.writeTransformToSettings(self.pivotCalibrationResultTargetName, tooltipToToolMatrix)
     self.countdownLabel.setText("Calibration completed, error = %f mm" % self.pivotCalibrationLogic.GetPivotRMSE())
     logging.debug("Pivot calibration completed. Tool: {0}. RMSE = {1} mm".format(self.pivotCalibrationResultTargetNode.GetName(), self.pivotCalibrationLogic.GetPivotRMSE()))
-
+    self.updatePlusTransform(self.connectorNode.GetID(), self.cauteryTipToCautery)
+        
   def onCauteryPivotClicked(self):#lumpnav
     logging.debug('onCauteryPivotClicked')
+    self.updatePlusTransform(self.connectorNode.GetID(), self.needleTipToNeedle)
     self.startPivotCalibration('CauteryTipToCautery', self.CauteryToNeedle, self.cauteryTipToCautery)
-
+    
   def onNeedlePivotClicked(self):#lumpnav
     logging.debug('onNeedlePivotClicked')
     self.startPivotCalibration('NeedleTipToNeedle', self.needleToReference, self.needleTipToNeedle)
@@ -657,19 +888,37 @@ class LumpNavGuidelet(Guidelet):
     self.navigationCollapsibleLayout.setContentsMargins(12, 4, 4, 4)
     self.navigationCollapsibleLayout.setSpacing(4)
 
-    self.rightCameraButton = qt.QPushButton("Setup right camera")
-    self.rightCameraButton.setCheckable(True)
-    setButtonStyle(self.rightCameraButton)
-
+    self.setupIntuitiveViewButton = qt.QPushButton('Record Front Position')
+    setButtonStyle(self.setupIntuitiveViewButton)
+    self.navigationCollapsibleLayout.addRow(self.setupIntuitiveViewButton)
+    
     self.leftCameraButton = qt.QPushButton("Setup left camera")
     self.leftCameraButton.setCheckable(True)
     setButtonStyle(self.leftCameraButton)
+    self.navigationCollapsibleLayout.addRow(self.leftCameraButton)
 
-    hbox = qt.QHBoxLayout()
-    hbox.addWidget(self.leftCameraButton)
-    hbox.addWidget(self.rightCameraButton)
-    self.navigationCollapsibleLayout.addRow(hbox)
+    # Select View Direction
+    self.rightCameraCollapsibleButton = ctk.ctkCollapsibleGroupBox()
+    self.rightCameraCollapsibleButton.collapsed=False
+    self.rightCameraCollapsibleButton.title = "Select View Direction"
+    self.navigationCollapsibleLayout.addRow(self.rightCameraCollapsibleButton)
 
+    self.rightCameraFormLayout = qt.QFormLayout(self.rightCameraCollapsibleButton)
+    
+    self.setFocalPointRButton = qt.QPushButton("Right")
+    setButtonStyle(self.setFocalPointRButton)
+    self.setFocalPointAButton = qt.QPushButton("Anterior")
+    setButtonStyle(self.setFocalPointAButton)
+    self.setFocalPointSButton = qt.QPushButton("Superior")
+    setButtonStyle(self.setFocalPointSButton)
+    
+    hboxRow = qt.QHBoxLayout()
+    hboxRow.addWidget(self.setFocalPointRButton)
+    hboxRow.addWidget(self.setFocalPointAButton)
+    hboxRow.addWidget(self.setFocalPointSButton)
+    
+    self.rightCameraFormLayout.addRow(hboxRow)
+    
     # "Camera Control" Collapsible
     self.zoomCollapsibleButton = ctk.ctkCollapsibleGroupBox()
     self.zoomCollapsibleButton.collapsed=True
@@ -873,12 +1122,12 @@ class LumpNavGuidelet(Guidelet):
       self.viewpointLogic.setCameraNode(self.LeftCamera)
       self.viewpointLogic.setTransformNode(self.cauteryCameraToCautery)
       self.viewpointLogic.startViewpoint()
-      self.rightCameraButton.setDisabled(True)
+      #self.rightCameraButton.setDisabled(True)
       self.setDisableSliders(False)
     else:
       self.setDisableSliders(True)
       self.viewpointLogic.stopViewpoint()
-      self.rightCameraButton.setDisabled(False)
+      #self.rightCameraButton.setDisabled(False)
 
   def onNavigationPanelToggled(self, toggled):
     if toggled == False:
