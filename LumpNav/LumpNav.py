@@ -466,15 +466,15 @@ class LumpNavGuidelet(Guidelet):
       
     # Set up breach warning light
     import BreachWarningLight
-    # logging.debug('Set up breach warning light')
-    # self.breachWarningLightLogic = BreachWarningLight.BreachWarningLightLogic()
-    # self.breachWarningLightLogic.setMarginSizeMm(float(self.parameterNode.GetParameter('BreachWarningLightMarginSizeMm')))
-    # if (self.parameterNode.GetParameter('EnableBreachWarningLight')=='True'):
-      # logging.debug("BreachWarningLight: active")
-      # self.breachWarningLightLogic.startLightFeedback(self.breachWarningNode, self.connectorNode)
-    # else:
-      # logging.debug("BreachWarningLight: shutdown")
-    # self.breachWarningLightLogic.shutdownLight(self.connectorNode)
+    logging.debug('Set up breach warning light')
+    self.breachWarningLightLogic = BreachWarningLight.BreachWarningLightLogic()
+    self.breachWarningLightLogic.setMarginSizeMm(float(self.parameterNode.GetParameter('BreachWarningLightMarginSizeMm')))
+    if (self.parameterNode.GetParameter('EnableBreachWarningLight')=='True'):
+      logging.debug("BreachWarningLight: active")
+      self.breachWarningLightLogic.startLightFeedback(self.breachWarningNode, self.connectorNode)
+    else:
+      logging.debug("BreachWarningLight: shutdown")
+    self.breachWarningLightLogic.shutdownLight(self.connectorNode)
 
     # Build transform tree
     logging.debug('Set up transform tree')
